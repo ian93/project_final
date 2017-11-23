@@ -1,0 +1,394 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Car Accident Choropleth</title>
+    <script src="https://d3js.org/d3.v3.js"></script>
+<!--    未採用topoJSON所以不讀入轉換程式-->
+<!--    <script src="topojson.min.js"></script>-->
+    <style>
+        .map-boundary{
+            stroke: #bbb;
+        }
+        .map-boundary.hightlight{
+            stroke: #fff;
+        }
+        svg, body{
+            background-color: #222;
+        }
+        .axis path, .axis line{
+            fill: none;
+            stroke: none;
+        }
+        .axis text{
+            font-size: 22px;
+            font-weight: 600;
+            font-family: "arial";
+            fill: #fff;
+        }
+        .tooltip{
+            position: absolute;
+            width: auto;
+            height: auto;
+            background-color: rgba(0, 0, 0, 0.6);
+            
+            color: #fff;
+            font-size: 18px;
+            text-align: center;
+            line-height: 150%;
+
+            border-style: solid; 
+            border-width: 3px;
+            border-radius: 7px;
+            border-color: dodgerblue;
+        }
+        a{
+            font-size: 26px;
+            color: darkturquoise;
+        }
+        #button{
+            position: relative;
+            left: 895px;
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <svg width="1200" height="700"></svg>
+    <br />
+    <div>
+        &nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://ian93.github.io/project_heatmap/" target="_new">Google Map JavaScript API + D3.js</a>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://ian93.github.io/project_data_filter/" target="_new">原始資料處理</a>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
+        <a href="https://ian93.github.io/project_choropleth/" target="_new">無選單版</a>
+    </div>
+    
+    <script>
+        // 處理 d3.max/d3.min 無法計算非第一層的資料所定的參數
+        var maxCases, minCases, a1_maxCases, a1_minCases;
+        
+        // 設定資料配對
+        var dist = ["大同區", "萬華區", "中山區", "大安區", "中正區", "松山區",
+                    "信義區", "士林區", "北投區", "文山區", "南港區", "內湖區"];
+        var distIndex = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        var distScale = d3.scale.ordinal()
+                                .domain(dist)
+                                .range(distIndex);
+        
+        // 讀入CSV及地理資料檔(GeoJSON/TopoJSON)
+        d3.csv("stat.csv", transData, function(dataSet){
+            d3.json("tp-dist-geo.json", function(mapDataSet){
+
+                // 建立新GeoJSON 方便與其他檔案合併
+                var newJsonMap = mapDataSet;
+//                console.log(newJsonMap);
+                
+                // 配對並合併資料 在GeoJSON的properties內建立新的類別
+                for(i = 0; i < dist.length; i++){
+                    var dataSetIndex = distScale(mapDataSet.features[i].properties.TOWNNAME);
+                    var CASES = dataSet[dataSetIndex].cases;
+                    var A1_CASES = dataSet[dataSetIndex].cases_a1;
+//                    console.log(mapDataSet.features[i].properties.TOWNNAME);
+//                    console.log(dataSet[dataSetIndex].cases);
+                    
+                    newJsonMap.features[i].properties.CASES = CASES;
+                    newJsonMap.features[i].properties.A1_CASES = A1_CASES;
+                }
+//                console.log(newJsonMap);
+                
+                // 處理 d3.max/d3.min 無法計算非第一層的資料
+                // (return d.properties.cases d3會無法判斷陣列長度)
+                maxCases = d3.max(dataSet, function(d){
+//                    console.log(typeof d.cases);
+                    return d.cases;
+                });
+                minCases = d3.min(dataSet, function(d){
+                    return d.cases;
+                });
+                a1_maxCases = d3.max(dataSet, function(d){
+                    return d.cases_a1;
+                });
+                a1_minCases = d3.min(dataSet, function(d){
+                    return d.cases_a1;
+                });
+                
+                // 綁定資料並繪製
+                bind(newJsonMap);
+                render(newJsonMap, "ALL");
+                button(newJsonMap);
+            });
+        });
+        
+        // 讀入資料數值處理
+        function transData(d){
+            
+            d.ppl      = +d.ppl     ;
+            d.cases    = +d.cases   ;
+            d.cases_a1 = +d.cases_a1;
+            
+            return d;
+        }
+        
+        // 下拉式選單設定
+        function button(mapDataSet){
+            var listArr = ["各區車禍案件數", "各區A1類車禍(重大車禍)案件數"];
+            var listRange = ["ALL", "A1"];
+            var listScale = d3.scale.ordinal()
+                                    .domain(listArr)
+                                    .range(listRange);
+//            console.log(typeof listScale("各區A1類車禍(重大車禍)案件數"));
+            
+            var selection = d3.select("body")
+                              .append("select")
+                              .attr("id", "button")
+                              .selectAll("option")
+                              .data(listArr);
+            selection.enter().append("option");
+            selection.exit().remove();
+            
+            d3.selectAll("body option")
+                .attr({
+                    value: function(d){
+                        return listScale(d);
+                    }
+              }).text(function(d){
+                    return d;
+            });
+            
+            d3.select("select").on("change", function(){
+                var value = d3.select("select").property("value");
+                update(mapDataSet, value);
+            });
+        }
+        
+        // 重新繪製函式
+        function update(mapDataSet, caseType){
+            bind(mapDataSet);
+            render(mapDataSet, caseType);
+        }
+        
+        
+        // 繪製函式
+        function render(mapDataSet, caseType){
+
+            // ------------------- 設定區 -------------------
+            
+            // 設定顏色的比例尺
+            if (caseType === "ALL"){
+                var linear = d3.scale.linear()
+                                 .domain([minCases, maxCases])
+                                 .range([0, 1]);
+                // 滑鼠移開的顏色
+                var bright_1 = d3.rgb(255, 255, 200);
+                var dark_1 = d3.rgb(175, 0, 0);
+                var setColor_1 = d3.interpolate(bright_1, dark_1);
+                // 滑鼠在上的顏色
+                var bright_2 = d3.rgb(225, 225, 135);
+                var dark_2 = d3.rgb(225, 0, 0);
+                var setColor_2 = d3.interpolate(bright_2, dark_2);
+            }
+            if (caseType === "A1"){
+                var linear = d3.scale.linear()
+                                 .domain([a1_minCases, a1_maxCases])
+                                 .range([0, 1]);
+                // 滑鼠移開的顏色
+                var bright_1 = d3.rgb(150, 200, 150);
+                var dark_1 = d3.rgb(0, 75, 175);
+                var setColor_1 = d3.interpolate(bright_1, dark_1);
+                // 滑鼠在上的顏色
+                var bright_2 = d3.rgb(75, 150, 75);
+                var dark_2 = d3.rgb(0, 0, 75);
+                var setColor_2 = d3.interpolate(bright_2, dark_2);
+            }
+            
+            // 顏色比例尺參數設定
+            var svgWidth = +d3.select("svg").attr("width"),
+                svgHeight = +d3.select("svg").attr("height");
+            var svg = d3.select("svg")
+	                    .attr("width", svgWidth)
+	                    .attr("height", svgHeight);
+            
+            var scalePadding = 100,
+                scaleWidth = 30,
+                scaleHeight = svgHeight - (scalePadding * 2);
+            
+              // 顏色part
+              var grad = svg.append("defs").append("linearGradient")
+                             .attr("id", "colorScale" + caseType)   // 因應line 355
+                             .attr({
+                                 x1:   "0%",
+                                 y1: "100%",
+                                 x2:   "0%",
+                                 y2:   "0%"  
+                             });                                  
+              var stop1 = grad.append("stop")
+                              .attr("offset", "0%")
+                              .style("stop-color", bright_1.toString());
+//              console.log(bright_1);
+              var stop2 = grad.append("stop")
+                              .attr("offset", "100%")
+                              .style("stop-color", dark_1.toString());
+//              console.log(dark_1);
+  
+              // 文字part
+              if (caseType === "ALL"){
+                  var yScale = d3.scale.linear()
+                                   .domain([minCases, maxCases])
+                                   .range([svgHeight - scalePadding, scalePadding]);
+                  var yAxis = d3.svg.axis()
+                                   .scale(yScale)
+                                   .orient("left")
+                                   .tickSize(scaleWidth, 0)
+                                   .tickValues([minCases, 1000, 1500, 2000, 2500, maxCases])
+//                                       .tickValues([minCases, 1200, 1700, 2200, 2700, maxCases])
+                                   .tickFormat(function(d){
+                                       return d + " 件";
+                                   });
+              }
+              if (caseType === "A1"){
+                  var yScale = d3.scale.linear()
+                                   .domain([a1_minCases, a1_maxCases])
+                                   .range([svgHeight - scalePadding, scalePadding]);
+                  var yAxis = d3.svg.axis()
+                                   .scale(yScale)
+                                   .orient("left")
+                                   .tickSize(scaleWidth, 0)
+                                   .tickValues([a1_minCases, 7, 10, a1_maxCases])
+                                   .tickFormat(function(d){
+                                       return d + " 件";
+                                   });
+              }
+            
+            // 動畫漸變時間設定(ms)
+            var dTime = 400;
+            
+            // 加入提示框(html div；非SVG)
+            // 可使提示框超出SVG範圍 且「使長字串可換行」
+            var tooltip = d3.select("body")
+							.append("div")
+							.attr("class", "tooltip")
+							.style("opacity", 0.0);
+            
+            // ----------------- 設定區 End -----------------
+            
+            
+            // ------------------- 繪圖區 -------------------
+            
+            // 繪製地圖與建立互動物件(動畫/提示框)
+            d3.selectAll("path").attr({
+                fill: function(d){
+                    if (caseType === "ALL")
+                        return setColor_1(linear(d.properties.CASES));
+                    if (caseType === "A1")
+                        return setColor_1(linear(d.properties.A1_CASES));
+                },
+                    "stroke-width": 1
+            })
+            
+            
+              .on("mouseover", function(d){
+                d3.select(this).transition().duration(dTime).attr({
+                    fill: function(d){
+                        if (caseType === "ALL")
+                            return setColor_2(linear(d.properties.CASES));
+                        if (caseType === "A1")
+                            return setColor_2(linear(d.properties.A1_CASES));
+                    },
+                    "stroke-width": 6
+                });
+                d3.select(this).classed("hightlight", true);
+                
+                if (caseType === "ALL"){
+                    // HTML5 換行語法 <br />, 單獨一個不成對(非<br></br>)
+                    tooltip.html(d.properties.TOWNNAME + "<br />" +
+                                 "&nbsp;&nbsp; 2016年車禍件數為：" +
+                                 d.properties.CASES + "件 &nbsp;&nbsp;")
+                        .style("left", (d3.event.pageX + 5) + "px")
+                        .style("top", (d3.event.pageY + 20) + "px")
+                        .style("opacity",1.0);
+                }
+                if (caseType === "A1"){
+                    tooltip.html(d.properties.TOWNNAME + "<br />" +
+                                 "&nbsp;&nbsp; 2016年A1類(重大)車禍件數為：" +
+                                 d.properties.A1_CASES + "件 &nbsp;&nbsp;")
+                        .style("left", (d3.event.pageX + 5) + "px")
+                        .style("top", (d3.event.pageY + 20) + "px")
+                        .style("opacity",1.0);
+                }
+                
+            })
+            
+            
+              .on("mousemove",function(d){
+				tooltip.style("left", (d3.event.pageX + 5) + "px")
+				       .style("top", (d3.event.pageY + 20) + "px");
+			})
+            
+            
+              .on("mouseout", function(d){
+                d3.select(this).transition().duration(dTime).attr({
+                    fill: function(d){
+                        if (caseType === "ALL")
+                            return setColor_1(linear(d.properties.CASES));
+                        if (caseType === "A1")
+                            return setColor_1(linear(d.properties.A1_CASES));
+                    },
+                    "stroke-width": 1
+                });
+                d3.select(this).classed("hightlight", false);
+                
+                tooltip.style("opacity",0.0);
+            });
+            
+            // 繪製顏色比例尺
+            var colorRect = d3.select("svg").append("rect")
+                              .attr({
+                                  x: scalePadding*2,
+                                  y: scalePadding,
+                                  rx: 15, // 橢圓角x向半徑
+                                  ry: 10, // 橢圓角y向半徑
+                                  width: scaleWidth,
+                                  height: scaleHeight
+                              })
+                              .style("fill","url(#" + grad.attr("id") + ")");
+            d3.select("svg").append("g")
+                            .attr("class","axis")
+                              .attr("id", "y-axis")
+                            .attr("transform", "translate("+(scalePadding*2+scaleWidth-5)+", 0)");
+            d3.select("#y-axis").call(yAxis);
+            
+            
+            // ----------------- 繪圖區 End -----------------
+        }
+        
+        function bind(geoRoot){
+            
+            // 地理投影器: 設定投影方式(麥卡托)、定位點([經度,緯度])、縮放(scale)
+            var projection = d3.geo.mercator().center([121.5,25.125]).scale(130000);
+//            console.log(projection([121.54949,25.085062]))
+            
+            // 路徑產生器: d3.geo.path()
+            var path = d3.geo.path().projection(projection);
+            
+//            // 地理資料檔: 使用topojson.js載入地理資料 從topo.json轉成geo.json (要改成function bind(topoRoot))
+//            // 未使用，使用後所有呼叫資料方式都要改寫
+//            var geoRoot = topojson.feature(topoRoot, topoRoot.objects);
+//            console.log(geoRoot);
+            
+            // 綁定path與載入的地理資料(features:每一地理區劃)
+            // var selection = d3.select("svg").selectAll("path").data(geoRoot.geometries) --- 不含dbf
+            var selection = d3.select("svg").selectAll("path").data(geoRoot.features);
+            selection.enter().append("path").classed("map-boundary", true)
+                .attr("d", path)
+                .attr("id", function(d){
+                    return d.properties.TOWNNAME;
+            });
+            selection.exit().remove();
+            
+        }
+    </script>
+
+</body>
+</html>
